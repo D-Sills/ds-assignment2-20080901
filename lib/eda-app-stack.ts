@@ -55,6 +55,10 @@ export class EDAAppStack extends cdk.Stack {
       const rejectionTopic = new sns.Topic(this, "RejectionTopic", {
         displayName: "Rejection topic",
       });
+      
+      const deletionTopic = new sns.Topic(this, 'ImageDeletionTopic', {
+        displayName: 'Image Deletion Topic'
+      });
   // Lambda functions
 
   const processImageFn = new lambdanode.NodejsFunction(
@@ -65,7 +69,7 @@ export class EDAAppStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_18_X,
       entry: `${__dirname}/../lambdas/processImage.ts`,
       timeout: cdk.Duration.seconds(15),
-      memorySize: 128,
+      memorySize: 1024,
       environment: {
         TABLE_NAME: imageTable.tableName, 
         REGION: "eu-west-1",
@@ -86,25 +90,65 @@ export class EDAAppStack extends cdk.Stack {
     runtime: lambda.Runtime.NODEJS_18_X, 
     memorySize: 1024,
     timeout: cdk.Duration.seconds(10),
-    entry: `${__dirname}/../lambdas/rejectionMailer.ts`, // Adjust the path to where your Lambda code is
+    entry: `${__dirname}/../lambdas/rejectionMailer.ts`,
   });
   
+  const imageDeletionFn = new lambdanode.NodejsFunction(this, "ImageDeletionFunction", {
+    runtime: lambda.Runtime.NODEJS_18_X, 
+    memorySize: 1024,
+    timeout: cdk.Duration.seconds(10),
+    entry: `${__dirname}/../lambdas/imageDelete.ts`, 
+    environment: {
+      TABLE_NAME: imageTable.tableName, 
+      REGION: "eu-west-1",
+    },
+  });
+  
+  const updateTableFn = new lambdanode.NodejsFunction(this, "UpdateTableFunction", {
+    runtime: lambda.Runtime.NODEJS_18_X, 
+    memorySize: 1024,
+    timeout: cdk.Duration.seconds(10),
+    entry: `${__dirname}/../lambdas/updateTable.ts`, 
+    environment: {
+      TABLE_NAME: imageTable.tableName, 
+      REGION: "eu-west-1",
+    },
+  });
   // Event triggers
 
   imagesBucket.addEventNotification(
     s3.EventType.OBJECT_CREATED,
-    new s3n.SnsDestination(newImageTopic)  // Changed
+    new s3n.SnsDestination(newImageTopic)
+);
+
+imagesBucket.addEventNotification(
+  s3.EventType.OBJECT_REMOVED_DELETE,
+  new s3n.SnsDestination(deletionTopic)
 );
 
 newImageTopic.addSubscription(
   new subs.SqsSubscription(imageProcessQueue)
 );
 
+deletionTopic.addSubscription(
+  new subs.LambdaSubscription(imageDeletionFn)
+  );
+  
 rejectionTopic.addSubscription(
   new subs.SqsSubscription(imageRejectionDLQ)
 );
 
 newImageTopic.addSubscription(new subs.SqsSubscription(mailerQ));
+
+const updateFilterPolicy = {
+  comment_type: sns.SubscriptionFilter.stringFilter({
+    allowlist: ["Caption"]
+  })
+};
+
+deletionTopic.addSubscription(new subs.LambdaSubscription(updateTableFn, {
+  filterPolicy: updateFilterPolicy
+}));
 
   const newImageEventSource = new events.SqsEventSource(imageProcessQueue, {
     batchSize: 5,
@@ -154,7 +198,8 @@ newImageTopic.addSubscription(new subs.SqsSubscription(mailerQ));
   imageRejectionDLQ.grantSendMessages(rejectionMailerFn);
   imagesBucket.grantRead(processImageFn);
   imageTable.grantWriteData(processImageFn);
- 
+  imageTable.grantWriteData(imageDeletionFn);
+  imageTable.grantWriteData(updateTableFn);
   // Output
   
   new cdk.CfnOutput(this, "bucketName", {
