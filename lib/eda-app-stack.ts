@@ -8,13 +8,21 @@ import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
 import * as iam from "aws-cdk-lib/aws-iam";
-
+import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
 // import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 export class EDAAppStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
+
+    // Import the table ARN and create a reference to the DynamoDB table
+    const imageDatabaseArn = cdk.Fn.importValue("ImageTableArn");
+    const imageTable = dynamodb.Table.fromTableArn(
+      this,
+      "ImportedTable",
+      imageDatabaseArn
+    );
 
     const imagesBucket = new s3.Bucket(this, "images", {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
@@ -47,6 +55,10 @@ export class EDAAppStack extends cdk.Stack {
       entry: `${__dirname}/../lambdas/processImage.ts`,
       timeout: cdk.Duration.seconds(15),
       memorySize: 128,
+      environment: {
+        TABLE_NAME: imageTable.tableName, 
+        REGION: "eu-west-1",
+      },
     }
   );
 
@@ -97,7 +109,7 @@ newImageTopic.addSubscription(new subs.SqsSubscription(mailerQ));
   // Permissions
 
   imagesBucket.grantRead(processImageFn);
-
+  imageTable.grantWriteData(processImageFn);
   // Output
   
   new cdk.CfnOutput(this, "bucketName", {
