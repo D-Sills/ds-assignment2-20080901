@@ -6,13 +6,16 @@ import { DynamoDBDocumentClient, PutCommand } from "@aws-sdk/lib-dynamodb";
 const ddbDocClient = createDDbDocClient();
 
 export const handler: SQSHandler = async (event) => {
+    console.log("ARN ", process.env.TOPIC_ARN); // just for the update command
     console.log("Event ", event);
     for (const record of event.Records) {
-    const recordBody = JSON.parse(record.body);  // Parse SQS message
-    const snsMessage = JSON.parse(recordBody.Message); // Parse SNS message
-  
-      if (snsMessage.Records) {
-        for (const messageRecord of snsMessage.Records) {
+    const snsRecord = record as any; // Cast record to SNS type, thank you typescript
+    const message = snsRecord.Sns.Message; // Get the Message property from the Sns object, thank you cloudwatch logs
+    
+    const messageData = JSON.parse(message);
+        
+      if (messageData.Records) {
+        for (const messageRecord of messageData.Records) {
           const s3e = messageRecord.s3;
           const srcKey = decodeURIComponent(s3e.object.key.replace(/\+/g, " "));
   

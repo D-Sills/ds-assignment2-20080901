@@ -56,8 +56,8 @@ export class EDAAppStack extends cdk.Stack {
         displayName: "Rejection topic",
       });
       
-      const deletionTopic = new sns.Topic(this, 'ImageDeletionTopic', {
-        displayName: 'Image Deletion Topic'
+      const imageEventsTopic = new sns.Topic(this, 'ImageEventsTopic', {
+        displayName: 'Image Events Topic'
       });
   // Lambda functions
 
@@ -101,6 +101,7 @@ export class EDAAppStack extends cdk.Stack {
     environment: {
       TABLE_NAME: imageTable.tableName, 
       REGION: "eu-west-1",
+      TOPIC_ARN: imageEventsTopic.topicArn,
     },
   });
   
@@ -121,18 +122,13 @@ export class EDAAppStack extends cdk.Stack {
     new s3n.SnsDestination(newImageTopic)
 );
 
-imagesBucket.addEventNotification(
-  s3.EventType.OBJECT_REMOVED_DELETE,
-  new s3n.SnsDestination(deletionTopic)
-);
-
 newImageTopic.addSubscription(
   new subs.SqsSubscription(imageProcessQueue)
 );
 
-deletionTopic.addSubscription(
+imageEventsTopic.addSubscription(
   new subs.LambdaSubscription(imageDeletionFn)
-  );
+);
   
 rejectionTopic.addSubscription(
   new subs.SqsSubscription(imageRejectionDLQ)
@@ -146,7 +142,7 @@ const updateFilterPolicy = {
   })
 };
 
-deletionTopic.addSubscription(new subs.LambdaSubscription(updateTableFn, {
+imageEventsTopic.addSubscription(new subs.LambdaSubscription(updateTableFn, {
   filterPolicy: updateFilterPolicy
 }));
 
@@ -164,6 +160,12 @@ deletionTopic.addSubscription(new subs.LambdaSubscription(updateTableFn, {
     batchSize: 5,
     maxBatchingWindow: cdk.Duration.seconds(10),
   });
+  
+  imagesBucket.addEventNotification(
+    s3.EventType.OBJECT_REMOVED_DELETE,
+    new s3n.SnsDestination(imageEventsTopic)
+  );
+  
 
   mailerFn.addEventSource(newImageMailEventSource);
   rejectionMailerFn.addEventSource(rejectionMailerEventSource);
