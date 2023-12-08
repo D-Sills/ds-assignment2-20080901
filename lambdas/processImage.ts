@@ -9,6 +9,8 @@ import {
 } from "@aws-sdk/client-s3";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { SNSClient, PublishCommand } from "@aws-sdk/client-sns";
+
 const s3 = new S3Client();
 const ddbDocClient = createDDbDocClient();
 
@@ -27,12 +29,13 @@ export const handler: SQSHandler = async (event) => {
         const srcKey = decodeURIComponent(s3e.object.key.replace(/\+/g, " "));
         const fileExtension = srcKey.split('.').pop()?.toLowerCase();
         
-        if (fileExtension === 'jpeg' || fileExtension === 'png') {
+        if (fileExtension === 'jpeg' || fileExtension === 'png' || fileExtension === 'jpg') {
           // File has correct extension, proceed with processing and write to DynamoDB
           try {
             let origimage = null;
             
               // Download the image from the S3 source bucket.
+              // is this needed? i'm not sure why we need to download the image
               const params: GetObjectCommandInput = {
                 Bucket: srcBucket,
                 Key: srcKey,
@@ -42,9 +45,8 @@ export const handler: SQSHandler = async (event) => {
               await ddbDocClient.send(new PutCommand({
                 TableName: process.env.TABLE_NAME,
                 Item: {
-                  fileName: { S: srcKey },
-                  
-                  
+                  fileName: srcKey,
+                  uploadTime: new Date().toISOString(),
                 }
               }));
               console.log(`Processed and logged image: ${srcKey}`);
@@ -53,8 +55,13 @@ export const handler: SQSHandler = async (event) => {
               console.log(error);
             }
           } else {
-          console.log(`Rejected image with key: ${srcKey}`);
-          // No action needed here, as the Rejection Mailer will handle the notification
+          // File has incorrect extension, send to DLQ
+          const params = {
+            Message: JSON.stringify({ fileName: srcKey }),
+            TopicArn: process.env.DLQ_ARN,
+          };
+          const snsClient = new SNSClient({ region: process.env.REGION });
+          await snsClient.send(new PublishCommand(params));
         }
       }
     }

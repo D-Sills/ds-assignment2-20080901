@@ -31,19 +31,30 @@ export class EDAAppStack extends cdk.Stack {
     });
 
       // Integration infrastructure
-
-      const imageProcessQueue = new sqs.Queue(this, "img-created-queue", {
+      const imageRejectionDLQ = new sqs.Queue(this, "ImageRejectionDLQ", {
+        queueName: "ImageRejectionDLQ",
+        retentionPeriod: cdk.Duration.days(14), // Customize to your preference
+      });
+      
+            const mailerQ = new sqs.Queue(this, "mailer-queue", {
         receiveMessageWaitTime: cdk.Duration.seconds(10),
       });
-
-
-      const mailerQ = new sqs.Queue(this, "mailer-queue", {
+      
+      const imageProcessQueue = new sqs.Queue(this, "img-created-queue", {
         receiveMessageWaitTime: cdk.Duration.seconds(10),
+        deadLetterQueue: {
+          queue: imageRejectionDLQ,
+          maxReceiveCount: 3,
+        }
       });
 
       const newImageTopic = new sns.Topic(this, "NewImageTopic", {
         displayName: "New Image topic",
       }); 
+      
+      const rejectionTopic = new sns.Topic(this, "RejectionTopic", {
+        displayName: "Rejection topic",
+      });
   // Lambda functions
 
   const processImageFn = new lambdanode.NodejsFunction(
@@ -58,16 +69,26 @@ export class EDAAppStack extends cdk.Stack {
       environment: {
         TABLE_NAME: imageTable.tableName, 
         REGION: "eu-west-1",
+        DLQ_ARN: rejectionTopic.topicArn,
       },
     }
   );
 
-  const mailerFn = new lambdanode.NodejsFunction(this, "mailer-function", {
-    runtime: lambda.Runtime.NODEJS_16_X,
+  const mailerFn = new lambdanode.NodejsFunction(this, "MailerFunction", {
+    architecture: lambda.Architecture.ARM_64,
+    runtime: lambda.Runtime.NODEJS_18_X,
     memorySize: 1024,
-    timeout: cdk.Duration.seconds(3),
+    timeout: cdk.Duration.seconds(10),
     entry: `${__dirname}/../lambdas/mailer.ts`,
   });
+  
+  const rejectionMailerFn = new lambdanode.NodejsFunction(this, "RejectionMailerFunction", {
+    runtime: lambda.Runtime.NODEJS_18_X, 
+    memorySize: 1024,
+    timeout: cdk.Duration.seconds(10),
+    entry: `${__dirname}/../lambdas/rejectionMailer.ts`, // Adjust the path to where your Lambda code is
+  });
+  
   // Event triggers
 
   imagesBucket.addEventNotification(
@@ -77,6 +98,10 @@ export class EDAAppStack extends cdk.Stack {
 
 newImageTopic.addSubscription(
   new subs.SqsSubscription(imageProcessQueue)
+);
+
+rejectionTopic.addSubscription(
+  new subs.SqsSubscription(imageRejectionDLQ)
 );
 
 newImageTopic.addSubscription(new subs.SqsSubscription(mailerQ));
@@ -91,8 +116,15 @@ newImageTopic.addSubscription(new subs.SqsSubscription(mailerQ));
     maxBatchingWindow: cdk.Duration.seconds(10),
   }); 
 
+  const rejectionMailerEventSource = new events.SqsEventSource(imageRejectionDLQ, {
+    batchSize: 5,
+    maxBatchingWindow: cdk.Duration.seconds(10),
+  });
+
   mailerFn.addEventSource(newImageMailEventSource);
+  rejectionMailerFn.addEventSource(rejectionMailerEventSource);
   processImageFn.addEventSource(newImageEventSource);
+
 
   mailerFn.addToRolePolicy(
     new iam.PolicyStatement({
@@ -106,10 +138,23 @@ newImageTopic.addSubscription(new subs.SqsSubscription(mailerQ));
     })
   );
 
+  rejectionMailerFn.addToRolePolicy(
+  new iam.PolicyStatement({
+    effect: iam.Effect.ALLOW,
+    actions: [
+      "ses:SendEmail",
+      "ses:SendRawEmail",
+      "ses:SendTemplatedEmail",
+    ],
+    resources: ["*"],
+  }));
   // Permissions
-
+  rejectionTopic.grantPublish(processImageFn);
+  newImageTopic.grantPublish(processImageFn);
+  imageRejectionDLQ.grantSendMessages(rejectionMailerFn);
   imagesBucket.grantRead(processImageFn);
   imageTable.grantWriteData(processImageFn);
+ 
   // Output
   
   new cdk.CfnOutput(this, "bucketName", {
