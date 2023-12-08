@@ -36,7 +36,7 @@ export class EDAAppStack extends cdk.Stack {
         retentionPeriod: cdk.Duration.days(14), // Customize to your preference
       });
       
-            const mailerQ = new sqs.Queue(this, "mailer-queue", {
+      const mailerQ = new sqs.Queue(this, "mailer-queue", {
         receiveMessageWaitTime: cdk.Duration.seconds(10),
       });
       
@@ -44,107 +44,75 @@ export class EDAAppStack extends cdk.Stack {
         receiveMessageWaitTime: cdk.Duration.seconds(10),
         deadLetterQueue: {
           queue: imageRejectionDLQ,
-          maxReceiveCount: 3,
+          maxReceiveCount: 1,
         }
-      });
-
-      const newImageTopic = new sns.Topic(this, "NewImageTopic", {
-        displayName: "New Image topic",
-      }); 
-      
-      const rejectionTopic = new sns.Topic(this, "RejectionTopic", {
-        displayName: "Rejection topic",
       });
       
       const imageEventsTopic = new sns.Topic(this, 'ImageEventsTopic', {
         displayName: 'Image Events Topic'
       });
+      
+      
   // Lambda functions
-
-  const processImageFn = new lambdanode.NodejsFunction(
-    this,
+  const processImageFn = this.createLambdaFunction(
     "ProcessImageFn",
-    {
-      // architecture: lambda.Architecture.ARM_64,
-      runtime: lambda.Runtime.NODEJS_18_X,
-      entry: `${__dirname}/../lambdas/processImage.ts`,
-      timeout: cdk.Duration.seconds(15),
-      memorySize: 1024,
-      environment: {
-        TABLE_NAME: imageTable.tableName, 
-        REGION: "eu-west-1",
-        DLQ_ARN: rejectionTopic.topicArn,
-      },
-    }
+    "../lambdas/processImage.ts",
+    imageTable
   );
 
-  const mailerFn = new lambdanode.NodejsFunction(this, "MailerFunction", {
-    architecture: lambda.Architecture.ARM_64,
-    runtime: lambda.Runtime.NODEJS_18_X,
-    memorySize: 1024,
-    timeout: cdk.Duration.seconds(10),
-    entry: `${__dirname}/../lambdas/mailer.ts`,
-  });
+  const mailerFn = this.createLambdaFunction(
+    "MailerFunction",
+    "../lambdas/mailer.ts",
+    imageTable
+  );
   
-  const rejectionMailerFn = new lambdanode.NodejsFunction(this, "RejectionMailerFunction", {
-    runtime: lambda.Runtime.NODEJS_18_X, 
-    memorySize: 1024,
-    timeout: cdk.Duration.seconds(10),
-    entry: `${__dirname}/../lambdas/rejectionMailer.ts`,
-  });
+  const rejectionMailerFn = this.createLambdaFunction(
+    "RejectionMailerFunction",
+    "../lambdas/rejectionMailer.ts",
+    imageTable
+  );
   
-  const imageDeletionFn = new lambdanode.NodejsFunction(this, "ImageDeletionFunction", {
-    runtime: lambda.Runtime.NODEJS_18_X, 
-    memorySize: 1024,
-    timeout: cdk.Duration.seconds(10),
-    entry: `${__dirname}/../lambdas/imageDelete.ts`, 
-    environment: {
-      TABLE_NAME: imageTable.tableName, 
-      REGION: "eu-west-1",
+  const imageDeletionFn = this.createLambdaFunction(
+    "ImageDeletionFunction",
+    "../lambdas/imageDelete.ts",
+    imageTable,
+    {
       TOPIC_ARN: imageEventsTopic.topicArn,
-    },
-  });
+    }
+  );
   
-  const updateTableFn = new lambdanode.NodejsFunction(this, "UpdateTableFunction", {
-    runtime: lambda.Runtime.NODEJS_18_X, 
-    memorySize: 1024,
-    timeout: cdk.Duration.seconds(10),
-    entry: `${__dirname}/../lambdas/updateTable.ts`, 
-    environment: {
-      TABLE_NAME: imageTable.tableName, 
-      REGION: "eu-west-1",
-    },
-  });
+  const updateTableFn = this.createLambdaFunction(
+    "UpdateTableFunction",
+    "../lambdas/updateTable.ts",
+    imageTable
+  );
+  
   // Event triggers
-
   imagesBucket.addEventNotification(
     s3.EventType.OBJECT_CREATED,
-    new s3n.SnsDestination(newImageTopic)
-);
-
-newImageTopic.addSubscription(
-  new subs.SqsSubscription(imageProcessQueue)
-);
-
-imageEventsTopic.addSubscription(
-  new subs.LambdaSubscription(imageDeletionFn)
-);
+    new s3n.SnsDestination(imageEventsTopic)
+  );
   
-rejectionTopic.addSubscription(
-  new subs.SqsSubscription(imageRejectionDLQ)
-);
+  imageEventsTopic.addSubscription(new subs.LambdaSubscription(processImageFn));
+  imageEventsTopic.addSubscription(new subs.LambdaSubscription(imageDeletionFn));
+  imageEventsTopic.addSubscription(new subs.SqsSubscription(imageProcessQueue));
+  imageEventsTopic.addSubscription(new subs.SqsSubscription(imageRejectionDLQ));
+  imageEventsTopic.addSubscription(new subs.SqsSubscription(mailerQ));
+  
+  imagesBucket.addEventNotification(
+    s3.EventType.OBJECT_REMOVED_DELETE,
+    new s3n.SnsDestination(imageEventsTopic)
+  );
 
-newImageTopic.addSubscription(new subs.SqsSubscription(mailerQ));
-
-const updateFilterPolicy = {
-  comment_type: sns.SubscriptionFilter.stringFilter({
-    allowlist: ["Caption"]
-  })
-};
-
-imageEventsTopic.addSubscription(new subs.LambdaSubscription(updateTableFn, {
-  filterPolicy: updateFilterPolicy
-}));
+  const updateFilterPolicy = {
+    comment_type: sns.SubscriptionFilter.stringFilter({
+      allowlist: ["Caption"]
+    })
+  };
+  
+  imageEventsTopic.addSubscription(new subs.LambdaSubscription(updateTableFn, {
+    filterPolicy: updateFilterPolicy
+  }));
 
   const newImageEventSource = new events.SqsEventSource(imageProcessQueue, {
     batchSize: 5,
@@ -161,16 +129,10 @@ imageEventsTopic.addSubscription(new subs.LambdaSubscription(updateTableFn, {
     maxBatchingWindow: cdk.Duration.seconds(10),
   });
   
-  imagesBucket.addEventNotification(
-    s3.EventType.OBJECT_REMOVED_DELETE,
-    new s3n.SnsDestination(imageEventsTopic)
-  );
-  
 
   mailerFn.addEventSource(newImageMailEventSource);
   rejectionMailerFn.addEventSource(rejectionMailerEventSource);
   processImageFn.addEventSource(newImageEventSource);
-
 
   mailerFn.addToRolePolicy(
     new iam.PolicyStatement({
@@ -194,18 +156,39 @@ imageEventsTopic.addSubscription(new subs.LambdaSubscription(updateTableFn, {
     ],
     resources: ["*"],
   }));
+  
   // Permissions
-  rejectionTopic.grantPublish(processImageFn);
-  newImageTopic.grantPublish(processImageFn);
+  imageEventsTopic.grantPublish(processImageFn);
+  imageEventsTopic.grantPublish(processImageFn);
   imageRejectionDLQ.grantSendMessages(rejectionMailerFn);
   imagesBucket.grantRead(processImageFn);
   imageTable.grantWriteData(processImageFn);
   imageTable.grantWriteData(imageDeletionFn);
   imageTable.grantWriteData(updateTableFn);
-  // Output
   
+  // Output the bucket name
   new cdk.CfnOutput(this, "bucketName", {
     value: imagesBucket.bucketName,
   });
   }
+  
+  private createLambdaFunction(
+    functionId: string,
+        entryPath: string,
+        table: dynamodb.ITable,
+        additionalEnv?: { [key: string]: string }
+    ): lambdanode.NodejsFunction {
+        return new lambdanode.NodejsFunction(this, functionId, {
+            architecture: lambda.Architecture.ARM_64,
+            runtime: lambda.Runtime.NODEJS_16_X,
+            entry: `${__dirname}/${entryPath}`,
+            timeout: cdk.Duration.seconds(10),
+            memorySize: 1024,
+            environment: {
+                TABLE_NAME: table.tableName,
+                REGION: "eu-west-1",
+                ...additionalEnv,
+            },
+        });
+    }
 }

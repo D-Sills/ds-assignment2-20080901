@@ -20,7 +20,7 @@ export const handler: SQSHandler = async (event) => {
     const recordBody = JSON.parse(record.body);  // Parse SQS message
     const snsMessage = JSON.parse(recordBody.Message); // Parse SNS message
 
-    if (snsMessage.Records) {
+    if (snsMessage.Records && snsMessage.Records[0].eventName.startsWith("ObjectCreated")) {
       console.log("Record body ", JSON.stringify(snsMessage));
       for (const messageRecord of snsMessage.Records) {
         const s3e = messageRecord.s3;
@@ -56,12 +56,7 @@ export const handler: SQSHandler = async (event) => {
             }
           } else {
           // File has incorrect extension, send to DLQ
-          const params = {
-            Message: JSON.stringify({ fileName: srcKey }),
-            TopicArn: process.env.DLQ_ARN,
-          };
-          const snsClient = new SNSClient({ region: process.env.REGION });
-          await snsClient.send(new PublishCommand(params));
+          throw new Error(`File with key ${srcKey} has an invalid extension.`);
         }
       }
     }

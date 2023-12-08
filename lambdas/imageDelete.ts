@@ -14,7 +14,7 @@ export const handler: SQSHandler = async (event) => {
     
     const messageData = JSON.parse(message);
         
-      if (messageData.Records) {
+      if (messageData.Records && messageData.Records[0].eventName.startsWith("ObjectRemoved")) {
         for (const messageRecord of messageData.Records) {
           const s3e = messageRecord.s3;
           const srcKey = decodeURIComponent(s3e.object.key.replace(/\+/g, " "));

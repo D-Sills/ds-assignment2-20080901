@@ -3,13 +3,11 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
 
 export class ImageStorageStack extends cdk.Stack {
-  public readonly imagesTable: dynamodb.Table;
-
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
     // DynamoDB table for image file names
-    this.imagesTable = new dynamodb.Table(this, 'ImageFiles', {
+    const imagesTable = new dynamodb.Table(this, 'ImageFiles', {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       partitionKey: {
         name: 'fileName', 
@@ -21,8 +19,10 @@ export class ImageStorageStack extends cdk.Stack {
 
     // Output the table ARN for cross-stack access
     new cdk.CfnOutput(this, 'ImageTableArn', {
-      value: this.imagesTable.tableArn,
+      value: imagesTable.tableArn,
       exportName: 'ImageTableArn',
     });
+    
+    
   }
 }
