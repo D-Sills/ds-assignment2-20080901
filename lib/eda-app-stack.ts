@@ -10,14 +10,11 @@ import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
-import { DynamoEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
-// import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 export class EDAAppStack extends cdk.Stack {
     constructor(scope: Construct, id: string, props?: cdk.StackProps) {
         super(scope, id, props);
 
-        // Import the table ARN and create a reference to the DynamoDB table
         const imageTable = new dynamodb.Table(this, "ImagesFiles", {
             billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
             partitionKey: {
@@ -148,8 +145,6 @@ export class EDAAppStack extends cdk.Stack {
         const imageDeletionEventSource = new events.DynamoEventSource(imageTable, {
             startingPosition: lambda.StartingPosition.TRIM_HORIZON,
             batchSize: 5,
-            bisectBatchOnError: true,
-            retryAttempts: 2,
         });
 
         addDeleteMailerFn.addEventSource(newImageMailEventSource);
@@ -182,7 +177,6 @@ export class EDAAppStack extends cdk.Stack {
         );
 
         // Permissions
-        imageRejectionDLQ.grantSendMessages(rejectionMailerFn);
         imagesBucket.grantRead(processImageFn);
         imageTable.grantWriteData(processImageFn);
         imageTable.grantWriteData(imageDeletionFn);

@@ -1,5 +1,9 @@
 import { DynamoDBStreamHandler } from "aws-lambda";
-import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
+import {
+    SESClient,
+    SendEmailCommand,
+    SendEmailCommandInput,
+} from "@aws-sdk/client-ses";
 import { SES_EMAIL_FROM, SES_EMAIL_TO } from "../env";
 
 const sesClient = new SESClient({ region: "eu-west-1" });
@@ -22,11 +26,11 @@ export const handler: DynamoDBStreamHandler = async (event) => {
         }
 
         if (emailSubject) {
-            const params = {
+            const params: SendEmailCommandInput = {
                 Destination: { ToAddresses: [SES_EMAIL_TO] },
                 Message: {
-                    Body: { Text: { Data: emailBody, Charset: "UTF-8" } },
-                    Subject: { Data: emailSubject, Charset: "UTF-8" },
+                    Body: { Html: { Charset: "UTF-8", Data: emailBody } },
+                    Subject: { Charset: "UTF-8", Data: emailSubject },
                 },
                 Source: SES_EMAIL_FROM,
             };
