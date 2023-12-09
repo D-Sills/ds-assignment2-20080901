@@ -10,6 +10,7 @@ import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
+import { DynamoEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
 // import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 export class EDAAppStack extends cdk.Stack {
@@ -17,13 +18,17 @@ export class EDAAppStack extends cdk.Stack {
     super(scope, id, props);
 
     // Import the table ARN and create a reference to the DynamoDB table
-    const imageDatabaseArn = cdk.Fn.importValue("ImageTableArn");
-    const imageTable = dynamodb.Table.fromTableArn(
-      this,
-      "ImportedTable",
-      imageDatabaseArn
-    );
-
+    const imageTable = new dynamodb.Table(this, 'ImageFiles', {
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      partitionKey: {
+        name: 'fileName', 
+        type: dynamodb.AttributeType.STRING,
+      },
+      stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+      tableName: 'ImageFiles',
+      removalPolicy: cdk.RemovalPolicy.DESTROY, 
+    });
+    
     const imagesBucket = new s3.Bucket(this, "images", {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
@@ -59,16 +64,16 @@ export class EDAAppStack extends cdk.Stack {
     "../lambdas/processImage.ts",
     imageTable
   );
-
-  const mailerFn = this.createLambdaFunction(
-    "MailerFunction",
-    "../lambdas/mailer.ts",
-    imageTable
-  );
   
   const rejectionMailerFn = this.createLambdaFunction(
     "RejectionMailerFunction",
     "../lambdas/rejectionMailer.ts",
+    imageTable
+  );
+  
+  const addDeleteMailerFn = this.createLambdaFunction(
+    "Add-DeleteMailerFunction",
+    "../lambdas/addDeleteMailer.ts",
     imageTable
   );
   
@@ -129,12 +134,18 @@ export class EDAAppStack extends cdk.Stack {
     maxBatchingWindow: cdk.Duration.seconds(10),
   });
   
-
-  mailerFn.addEventSource(newImageMailEventSource);
+  addDeleteMailerFn.addEventSource(newImageMailEventSource);
   rejectionMailerFn.addEventSource(rejectionMailerEventSource);
   processImageFn.addEventSource(newImageEventSource);
 
-  mailerFn.addToRolePolicy(
+  addDeleteMailerFn.addEventSource(new DynamoEventSource(imageTable, {
+    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+    batchSize: 5,
+    bisectBatchOnError: true,
+    retryAttempts: 2
+  }));
+
+  addDeleteMailerFn.addToRolePolicy(
     new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
